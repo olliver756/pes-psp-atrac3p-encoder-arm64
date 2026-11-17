@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'PES_PSP_ATRAC3P_Encoder_ARM64_preparacao.zip'
+      - '.github/workflows/android-arm64.yml'
 
 permissions:
   contents: read
@@ -30,13 +31,20 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Ensure Android Rust standard library target is installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-linux-android
+          rustup target list --installed
+
       - name: Install Android NDK
         uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r27c
 
-      - name: Run Rust workspace tests
+      - name: Run Rust workspace tests (skip one phase-sensitive upstream test)
         working-directory: ${{ runner.temp }}/pes-atrac-source/atracdenc-rs-android-arm64
         run: cargo test --workspace --locked -- --skip gha::tests::two_tones_5000_11025_a32768_adjust
 
