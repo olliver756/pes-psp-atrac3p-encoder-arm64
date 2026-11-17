@@ -1,0 +1,81 @@
+name: Build ATRAC3+ encoder for Android ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'PES_PSP_ATRAC3P_Encoder_ARM64_preparacao.zip'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract prepared source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f PES_PSP_ATRAC3P_Encoder_ARM64_preparacao.zip
+          mkdir -p "$RUNNER_TEMP/pes-atrac-source"
+          unzip -q PES_PSP_ATRAC3P_Encoder_ARM64_preparacao.zip -d "$RUNNER_TEMP/pes-atrac-source"
+          test -f "$RUNNER_TEMP/pes-atrac-source/atracdenc-rs-android-arm64/Cargo.toml"
+
+      - name: Install stable Rust for Android ARM64
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Run Rust workspace tests
+        working-directory: ${{ runner.temp }}/pes-atrac-source/atracdenc-rs-android-arm64
+        run: cargo test --workspace --locked
+
+      - name: Build ATRAC encoder static library
+        working-directory: ${{ runner.temp }}/pes-atrac-source/atracdenc-rs-android-arm64
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+        run: cargo build -p atracdenc --release --locked --target aarch64-linux-android
+
+      - name: Link JNI shared library
+        working-directory: ${{ runner.temp }}/pes-atrac-source/atracdenc-rs-android-arm64
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p android/lib/arm64-v8a
+          "$TOOLCHAIN/aarch64-linux-android24-clang" \
+            -shared -fPIC \
+            -Wl,--no-undefined \
+            -Wl,--whole-archive target/aarch64-linux-android/release/libatracdenc.a -Wl,--no-whole-archive \
+            android/jni/atrac_jni.c \
+            -I"$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include" \
+            -llog -ldl -lm \
+            -o android/lib/arm64-v8a/libatrac_encoder.so
+          "$TOOLCHAIN/llvm-readelf" -h android/lib/arm64-v8a/libatrac_encoder.so
+          "$TOOLCHAIN/llvm-readelf" -d android/lib/arm64-v8a/libatrac_encoder.so
+
+      - name: Upload ARM64 encoder library
+        uses: actions/upload-artifact@v4
+        with:
+          name: atrac-encoder-android-arm64
+          path: |
+            ${{ runner.temp }}/pes-atrac-source/atracdenc-rs-android-arm64/android/lib/arm64-v8a/libatrac_encoder.so
+            ${{ runner.temp }}/pes-atrac-source/atracdenc-rs-android-arm64/android/java/com/olliver/pespspudioeditor/NativeAtrac.java
+            ${{ runner.temp }}/pes-atrac-source/atracdenc-rs-android-arm64/ANDROID_BUILD_README_PTBR.txt
+          if-no-files-found: error
+          retention-days: 14
